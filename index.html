@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>汉堡大作战 - 硬核挑战版</title>
+    <title>汉堡大作战 - 硬核版 (含音效)</title>
     <!-- 引入 MediaPipe Pose 和 Camera Utils -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -198,7 +198,7 @@
                 <b>硬核模式规则：</b><br>
                 1. 速度极快，干扰极多！<br>
                 2. <span style="color:#ff4444; font-weight:bold;">一旦接错，整个汉堡直接炸掉重置！</span><br>
-                3. 坚持住，制作尽可能多的汉堡！
+                3. 已添加游戏音效！
             </p>
             <button class="btn" onclick="game.start()">开始挑战</button>
         </div>
@@ -211,6 +211,73 @@
     </div>
 
 <script>
+// --- 音频合成管理器 ---
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+// 辅助函数：播放单个音符
+function playTone(freq, type, startTime, duration, volume = 0.1) {
+    const osc = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, startTime);
+    
+    gainNode.gain.setValueAtTime(volume, startTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+    
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    
+    osc.start(startTime);
+    osc.stop(startTime + duration);
+}
+
+// 1. 接对音效：清脆的高音“叮”
+function playSuccessSound() {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const t = audioCtx.currentTime;
+    // 频率从 523 (C5) 快速上升到 1046 (C6)
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(523.25, t);
+    osc.frequency.exponentialRampToValueAtTime(1046.50, t + 0.1);
+    gain.gain.setValueAtTime(0.2, t);
+    gain.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(t + 0.2);
+}
+
+// 2. 接错音效：低沉的“嗡”声 (表示失败)
+function playFailureSound() {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const t = audioCtx.currentTime;
+    // 锯齿波，频率从 150 下降到 50
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(150, t);
+    osc.frequency.linearRampToValueAtTime(50, t + 0.3);
+    gain.gain.setValueAtTime(0.2, t);
+    gain.gain.linearRampToValueAtTime(0.01, t + 0.3);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(t + 0.3);
+}
+
+// 3. 胜利音效：C大调琶音 (C5-E5-G5-C6)
+function playVictorySound() {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const t = audioCtx.currentTime;
+    // C5
+    playTone(523.25, 'sine', t, 0.1, 0.2);
+    // E5
+    playTone(659.25, 'sine', t + 0.1, 0.1, 0.2);
+    // G5
+    playTone(783.99, 'sine', t + 0.2, 0.1, 0.2);
+    // C6 (高音长一点)
+    playTone(1046.50, 'triangle', t + 0.3, 0.3, 0.2);
+}
+
 // --- 游戏配置 ---
 const CONFIG = {
     gameDuration: 300,
@@ -219,9 +286,9 @@ const CONFIG = {
     plateYOffset: 100,
     itemSize: 75,
     STACK_HEIGHT_STEP: 26,
-    fallSpeedBase: 5.5, // 极快
-    fallSpeedMax: 9,    // 极快
-    spawnRate: 50,      // 生成频率加快
+    fallSpeedBase: 5.5, 
+    fallSpeedMax: 9,    
+    spawnRate: 50,      
 };
 
 const BURGER_LAYERS = [
@@ -382,6 +449,9 @@ class Game {
         this.fallingItems = []; this.currentStack = []; this.particles = [];
         this.updateScoreUI(); this.updateRecipeUI(); this.lastTime = performance.now();
         
+        // 激活音频
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+
         this.timerInterval = setInterval(() => {
             if (this.timeLeft > 0) { this.timeLeft--; this.updateTimeUI(); }
             else { this.gameOver(); }
@@ -406,7 +476,7 @@ class Game {
         const c = Math.floor(Math.random() * 6);
         let type = BURGER_LAYERS[Math.floor(Math.random() * BURGER_LAYERS.length)];
         
-        // --- 难度提升：正确物品生成概率降至 20% ---
+        // 难度：正确物品生成概率 20%
         const neededIndex = this.currentStack.length;
         if (this.currentStack.length < BURGER_LAYERS.length && Math.random() < 0.2) {
             type = BURGER_LAYERS[this.currentStack.length];
@@ -440,24 +510,23 @@ class Game {
             if (item.active && item.x > pl - 20 && item.x < pr + 20 && itemBottom >= collisionY - 10 && itemBottom <= collisionY + 20) {
                 const idx = this.currentStack.length;
                 if (idx < BURGER_LAYERS.length && item.type.id === BURGER_LAYERS[idx].id) {
+                    // 接对了
                     this.currentStack.push(item.type);
+                    playSuccessSound(); // 播放接对音效
                     this.createParticles(item.x, item.y, '#FFD700');
                     this.fallingItems.splice(i, 1);
                     if (this.currentStack.length === BURGER_LAYERS.length) {
                         this.score++; this.updateScoreUI();
+                        playVictorySound(); // 播放胜利音效
                         this.createParticles(this.plate.x, this.plate.y - 100, '#FFFFFF');
                         this.currentStack = []; this.updateRecipeUI();
                     } else { this.updateRecipeUI(); }
                 } else {
-                    // --- 核心修改：接错了，全部重置！ ---
+                    // 接错了
                     item.active = false; 
-                    this.createParticles(item.x, item.y, '#555'); // 灰色尘埃
-                    
-                    // 强制重置堆叠
-                    this.currentStack = [];
-                    this.updateRecipeUI();
-                    
-                    // 额外特效：整个盘子也冒点灰烟，表示“炸了”
+                    playFailureSound(); // 播放接错音效
+                    this.createParticles(item.x, item.y, '#555');
+                    this.currentStack = []; this.updateRecipeUI();
                     this.createParticles(this.plate.x, this.plate.y - 30, '#444');
                 }
             }
