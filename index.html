@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>汉堡大作战 - 硬核挑战版</title>
+    <!-- 引入 MediaPipe Pose 和 Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <style>
+        :root {
+            --primary-color: #FF9F1C;
+            --secondary-color: #2EC4B6;
+            --bg-color: #CBF3F0;
+            --text-color: #333;
+            --panel-bg: rgba(255, 255, 255, 0.95);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            user-select: none;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #input-video { display: none; }
+
+        canvas {
+            background: linear-gradient(135deg, #89f7fe 0%, #66a6ff 100%);
+            box-shadow: 0 0 20px rgba(0,0,0,0.2);
+            border-radius: 12px;
+        }
+
+        .ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .hud-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .score-box, .timer-box, .recipe-box {
+            background: var(--panel-bg);
+            padding: 10px 20px;
+            border-radius: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-weight: bold;
+            color: var(--text-color);
+            border: 3px solid #fff;
+        }
+
+        .score-box { font-size: 1.5rem; }
+        .timer-box { font-size: 1.5rem; color: #E71D36; }
+        
+        .recipe-box {
+            flex-direction: row;
+            gap: 10px;
+        }
+        .recipe-title {
+            position: absolute;
+            top: -25px;
+            width: 100%;
+            text-align: center;
+            font-size: 0.9rem;
+            color: #fff;
+            text-shadow: 1px 1px 2px black;
+        }
+
+        .recipe-icon {
+            width: 40px; 
+            height: 40px;
+            filter: grayscale(0.5);
+            transition: transform 0.2s;
+        }
+        .recipe-icon.active {
+            filter: grayscale(0);
+            transform: scale(1.2);
+            border-bottom: 3px solid var(--secondary-color);
+        }
+
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.75);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            pointer-events: auto;
+            backdrop-filter: blur(5px);
+            color: white;
+            text-align: center;
+            transition: opacity 0.3s;
+        }
+
+        .hidden { opacity: 0; pointer-events: none; }
+
+        h1 { font-size: 3rem; margin-bottom: 10px; text-shadow: 2px 2px 0 #000; color: var(--primary-color); }
+        p { font-size: 1.2rem; margin-bottom: 20px; max-width: 600px; line-height: 1.6; }
+        
+        .btn {
+            padding: 15px 40px;
+            font-size: 1.5rem;
+            background-color: var(--secondary-color);
+            color: white;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(46, 196, 182, 0.4);
+            transition: transform 0.1s, background-color 0.2s;
+        }
+        .btn:hover { background-color: #25a096; transform: scale(1.05); }
+        .btn:active { transform: scale(0.95); }
+
+        .loader {
+            border: 8px solid #f3f3f3;
+            border-top: 8px solid var(--primary-color);
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 2s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        #camera-preview {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 160px;
+            height: 120px;
+            border: 2px solid white;
+            border-radius: 8px;
+            background: #000;
+            transform: scaleX(-1);
+            object-fit: cover;
+            z-index: 50;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <video id="input-video" playsinline></video>
+        <canvas id="game-canvas"></canvas>
+        <canvas id="camera-preview"></canvas>
+
+        <div class="ui-layer">
+            <div class="hud-top">
+                <div class="score-box"><span id="score-display">🍔 0</span></div>
+                <div class="timer-box"><span id="time-display">05:00</span></div>
+                <div class="recipe-box">
+                    <span class="recipe-title">目标顺序</span>
+                    <div id="recipe-icons" style="display:flex; gap:5px;"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="loading-screen" class="overlay">
+            <div class="loader"></div>
+            <h2>正在启动摄像头...</h2>
+        </div>
+
+        <div id="start-screen" class="overlay hidden">
+            <h1>🍔 汉堡大作战 🍔</h1>
+            <p>
+                <b>硬核模式规则：</b><br>
+                1. 速度极快，干扰极多！<br>
+                2. <span style="color:#ff4444; font-weight:bold;">一旦接错，整个汉堡直接炸掉重置！</span><br>
+                3. 坚持住，制作尽可能多的汉堡！
+            </p>
+            <button class="btn" onclick="game.start()">开始挑战</button>
+        </div>
+
+        <div id="gameover-screen" class="overlay hidden">
+            <h1>时间到！</h1>
+            <p>你制作了 <span id="final-score" style="font-size: 2rem; color: var(--primary-color);">0</span> 个汉堡！</p>
+            <button class="btn" onclick="location.reload()">再玩一次</button>
+        </div>
+    </div>
+
+<script>
+// --- 游戏配置 ---
+const CONFIG = {
+    gameDuration: 300,
+    plateWidth: 130,
+    plateHeight: 20,
+    plateYOffset: 100,
+    itemSize: 75,
+    STACK_HEIGHT_STEP: 26,
+    fallSpeedBase: 5.5, // 极快
+    fallSpeedMax: 9,    // 极快
+    spawnRate: 50,      // 生成频率加快
+};
+
+const BURGER_LAYERS = [
+    { id: 'bottom_bun', icon: '🍞', color: '#D2691E', isTop: false },
+    { id: 'cheese',      icon: '🧀', color: '#FFD700', isTop: false },
+    { id: 'bacon',       icon: '🥓', color: '#CD5C5C', isTop: false },
+    { id: 'veggie',      icon: '🥬', color: '#32CD32', isTop: false },
+    { id: 'bacon',       icon: '🥓', color: '#CD5C5C', isTop: false },
+    { id: 'cheese',      icon: '🧀', color: '#FFD700', isTop: false },
+    { id: 'top_bun',     icon: '🍞', color: '#F4A460', isTop: true }
+];
+
+// --- 绘图辅助函数 (复用) ---
+function drawBottomBun(ctx, x, y, size) {
+    const w = size;
+    const h = size * 0.6; 
+    ctx.save(); ctx.translate(x, y);
+    ctx.fillStyle = '#D68C45'; 
+    ctx.beginPath(); ctx.moveTo(-w/2, -h/4); ctx.lineTo(w/2, -h/4);
+    ctx.quadraticCurveTo(w/2 + 10, h/2, 0, h/2); 
+    ctx.quadraticCurveTo(-w/2 - 10, h/2, -w/2, -h/4); ctx.fill();
+    ctx.fillStyle = '#F2C078'; 
+    ctx.fillRect(-w/2 + 4, -h/2, w - 8, h/2 - 2);
+    ctx.strokeStyle = '#D68C45'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-w/2+8, -h/4); ctx.lineTo(w/2-8, -h/4); ctx.stroke();
+    ctx.restore();
+}
+
+function drawTopBun(ctx, x, y, size) {
+    const w = size;
+    const h = size * 0.65;
+    ctx.save(); ctx.translate(x, y);
+    ctx.fillStyle = '#E8A87C'; 
+    ctx.beginPath(); ctx.moveTo(-w/2, h/4); ctx.lineTo(w/2, h/4);
+    ctx.quadraticCurveTo(w/2 + 10, -h/2, 0, -h/2); 
+    ctx.quadraticCurveTo(-w/2 - 10, -h/2, -w/2, h/4); ctx.fill();
+    ctx.fillStyle = '#F2C078'; 
+    ctx.fillRect(-w/2 + 4, h/4 - 5, w - 8, h/2);
+    ctx.fillStyle = '#FFF8E7';
+    ctx.beginPath(); ctx.arc(-5, -10, 3, 0, Math.PI*2);
+    ctx.arc(8, -15, 3, 0, Math.PI*2); ctx.arc(0, -20, 3, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+}
+
+function drawLettuce(ctx, x, y, size) {
+    const s = size * 0.55;
+    ctx.save(); ctx.translate(x, y);
+    ctx.fillStyle = '#2E7D32'; 
+    ctx.beginPath(); ctx.moveTo(-s*0.8, s*0.2);
+    ctx.quadraticCurveTo(-s*0.5, -s*0.5, 0, -s*0.6);
+    ctx.quadraticCurveTo(s*0.5, -s*0.5, s*0.8, s*0.2);
+    ctx.quadraticCurveTo(0, s*0.5, -s*0.8, s*0.2); ctx.fill();
+    ctx.fillStyle = '#4CAF50';
+    ctx.beginPath(); ctx.arc(-s*0.2, 0, s*0.25, 0, Math.PI*2);
+    ctx.arc(s*0.2, 0, s*0.25, 0, Math.PI*2);
+    ctx.arc(0, -s*0.3, s*0.3, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+}
+
+function generateIconUrl(layer, iconSize = 40) {
+    const canvas = document.createElement('canvas');
+    canvas.width = iconSize;
+    canvas.height = iconSize;
+    const ctx = canvas.getContext('2d');
+    const cx = iconSize / 2;
+    const cy = iconSize / 2;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath(); ctx.arc(cx, cy, iconSize/2 - 2, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.lineWidth = 1; ctx.stroke();
+    if (layer.id === 'bottom_bun') drawBottomBun(ctx, cx, cy, iconSize);
+    else if (layer.id === 'top_bun') drawTopBun(ctx, cx, cy, iconSize);
+    else if (layer.id === 'veggie') drawLettuce(ctx, cx, cy, iconSize);
+    else {
+        ctx.font = `${iconSize}px Arial`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(layer.icon, cx, cy);
+    }
+    return canvas.toDataURL();
+}
+
+class Game {
+    constructor() {
+        this.canvas = document.getElementById('game-canvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.previewCanvas = document.getElementById('camera-preview');
+        this.previewCtx = this.previewCanvas.getContext('2d');
+        this.videoElement = document.getElementById('input-video');
+        
+        this.pose = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
+
+        this.isPlaying = false;
+        this.score = 0;
+        this.timeLeft = CONFIG.gameDuration;
+        this.lastTime = 0;
+        this.spawnTimer = 0;
+        this.particles = [];
+
+        this.plate = { x: window.innerWidth / 2, y: 0, targetX: window.innerWidth / 2 };
+        this.fallingItems = [];
+        this.currentStack = [];
+
+        this.pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, enableSegmentation: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        this.pose.onResults(this.onPoseResults.bind(this));
+
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+        
+        window.addEventListener('keydown', (e) => { if (e.code === 'Space') e.preventDefault(); });
+
+        this.initRecipeUI();
+        
+        this.camera = new Camera(this.videoElement, { onFrame: async () => { await this.pose.send({image: this.videoElement}); }, width: 640, height: 480 });
+        this.camera.start().then(() => {
+            document.getElementById('loading-screen').classList.add('hidden');
+            document.getElementById('start-screen').classList.remove('hidden');
+        }).catch(err => alert("无法启动摄像头"));
+    }
+
+    resize() { this.canvas.width = window.innerWidth; this.canvas.height = window.innerHeight; this.plate.y = this.canvas.height - CONFIG.plateYOffset; }
+
+    initRecipeUI() {
+        const container = document.getElementById('recipe-icons');
+        container.innerHTML = '';
+        BURGER_LAYERS.forEach((layer, index) => {
+            const img = document.createElement('img');
+            img.src = generateIconUrl(layer);
+            img.className = 'recipe-icon';
+            img.id = `recipe-icon-${index}`;
+            container.appendChild(img);
+        });
+    }
+
+    updateRecipeUI() {
+        const idx = this.currentStack.length;
+        BURGER_LAYERS.forEach((_, i) => {
+            const el = document.getElementById(`recipe-icon-${i}`);
+            if (i === idx) el.classList.add('active'); else el.classList.remove('active');
+        });
+    }
+
+    onPoseResults(results) {
+        this.previewCtx.save();
+        this.previewCtx.clearRect(0, 0, this.previewCanvas.width, this.previewCanvas.height);
+        this.previewCtx.translate(this.previewCanvas.width, 0);
+        this.previewCtx.scale(-1, 1);
+        this.previewCtx.drawImage(results.image, 0, 0, this.previewCanvas.width, this.previewCanvas.height);
+        this.previewCtx.restore();
+        if (!results.poseLandmarks) return;
+        let targetX = (1 - results.poseLandmarks[0].x) * this.canvas.width;
+        targetX = Math.max(CONFIG.plateWidth/2, Math.min(this.canvas.width - CONFIG.plateWidth/2, targetX));
+        this.plate.targetX = targetX;
+    }
+
+    start() {
+        document.getElementById('start-screen').classList.add('hidden');
+        this.isPlaying = true;
+        this.score = 0; this.timeLeft = CONFIG.gameDuration;
+        this.fallingItems = []; this.currentStack = []; this.particles = [];
+        this.updateScoreUI(); this.updateRecipeUI(); this.lastTime = performance.now();
+        
+        this.timerInterval = setInterval(() => {
+            if (this.timeLeft > 0) { this.timeLeft--; this.updateTimeUI(); }
+            else { this.gameOver(); }
+        }, 1000);
+        requestAnimationFrame(this.gameLoop.bind(this));
+    }
+
+    gameOver() {
+        this.isPlaying = false; clearInterval(this.timerInterval); 
+        document.getElementById('gameover-screen').classList.remove('hidden'); document.getElementById('final-score').textContent = this.score;
+    }
+
+    updateScoreUI() { document.getElementById('score-display').textContent = `🍔 ${this.score}`; }
+    updateTimeUI() {
+        const m = Math.floor(this.timeLeft / 60).toString().padStart(2, '0');
+        const s = (this.timeLeft % 60).toString().padStart(2, '0');
+        document.getElementById('time-display').textContent = `${m}:${s}`;
+    }
+
+    spawnItem() {
+        const w = this.canvas.width / 6;
+        const c = Math.floor(Math.random() * 6);
+        let type = BURGER_LAYERS[Math.floor(Math.random() * BURGER_LAYERS.length)];
+        
+        // --- 难度提升：正确物品生成概率降至 20% ---
+        const neededIndex = this.currentStack.length;
+        if (this.currentStack.length < BURGER_LAYERS.length && Math.random() < 0.2) {
+            type = BURGER_LAYERS[this.currentStack.length];
+        }
+
+        this.fallingItems.push({
+            x: c * w + w / 2, y: -50, type: type,
+            speed: CONFIG.fallSpeedBase + Math.random() * (CONFIG.fallSpeedMax - CONFIG.fallSpeedBase), active: true
+        });
+    }
+
+    createParticles(x, y, color) {
+        for (let i = 0; i < 12; i++) {
+            this.particles.push({ x, y, vx: (Math.random()-0.5)*10, vy: (Math.random()-0.5)*10, life: 1.0, color });
+        }
+    }
+
+    update(dt) {
+        this.plate.x += (this.plate.targetX - this.plate.x) * 0.2;
+        this.spawnTimer++;
+        if (this.spawnTimer > CONFIG.spawnRate) { this.spawnItem(); this.spawnTimer = 0; }
+
+        for (let i = this.fallingItems.length - 1; i >= 0; i--) {
+            const item = this.fallingItems[i];
+            item.y += item.speed;
+            const collisionY = this.plate.y - 15 - (this.currentStack.length * CONFIG.STACK_HEIGHT_STEP);
+            const itemBottom = item.y + CONFIG.itemSize / 2;
+            const pl = this.plate.x - CONFIG.plateWidth / 2;
+            const pr = this.plate.x + CONFIG.plateWidth / 2;
+
+            if (item.active && item.x > pl - 20 && item.x < pr + 20 && itemBottom >= collisionY - 10 && itemBottom <= collisionY + 20) {
+                const idx = this.currentStack.length;
+                if (idx < BURGER_LAYERS.length && item.type.id === BURGER_LAYERS[idx].id) {
+                    this.currentStack.push(item.type);
+                    this.createParticles(item.x, item.y, '#FFD700');
+                    this.fallingItems.splice(i, 1);
+                    if (this.currentStack.length === BURGER_LAYERS.length) {
+                        this.score++; this.updateScoreUI();
+                        this.createParticles(this.plate.x, this.plate.y - 100, '#FFFFFF');
+                        this.currentStack = []; this.updateRecipeUI();
+                    } else { this.updateRecipeUI(); }
+                } else {
+                    // --- 核心修改：接错了，全部重置！ ---
+                    item.active = false; 
+                    this.createParticles(item.x, item.y, '#555'); // 灰色尘埃
+                    
+                    // 强制重置堆叠
+                    this.currentStack = [];
+                    this.updateRecipeUI();
+                    
+                    // 额外特效：整个盘子也冒点灰烟，表示“炸了”
+                    this.createParticles(this.plate.x, this.plate.y - 30, '#444');
+                }
+            }
+            if (item.y > this.canvas.height + 50) this.fallingItems.splice(i, 1);
+        }
+
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            const p = this.particles[i]; p.x += p.vx; p.y += p.vy; p.life -= 0.05;
+            if (p.life <= 0) this.particles.splice(i, 1);
+        }
+    }
+
+    draw() {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+        this.ctx.lineWidth = 2;
+        const colW = this.canvas.width / 6;
+        for(let i=1; i<6; i++) { this.ctx.beginPath(); this.ctx.moveTo(i*colW, 0); this.ctx.lineTo(i*colW, this.canvas.height); this.ctx.stroke(); }
+
+        this.ctx.textAlign = 'center'; this.ctx.textBaseline = 'middle';
+
+        this.fallingItems.forEach(item => {
+            this.ctx.fillStyle = '#FFFFFF';
+            this.ctx.beginPath(); this.ctx.arc(item.x, item.y, CONFIG.itemSize/2 + 4, 0, Math.PI*2); this.ctx.fill();
+            this.ctx.strokeStyle = 'rgba(0,0,0,0.1)'; this.ctx.lineWidth = 1; this.ctx.stroke();
+            
+            if (item.type.id === 'bottom_bun') drawBottomBun(this.ctx, item.x, item.y, CONFIG.itemSize);
+            else if (item.type.id === 'top_bun') drawTopBun(this.ctx, item.x, item.y, CONFIG.itemSize);
+            else if (item.type.id === 'veggie') drawLettuce(this.ctx, item.x, item.y, CONFIG.itemSize);
+            else {
+                this.ctx.font = `${CONFIG.itemSize}px Arial`;
+                this.ctx.fillText(item.type.icon, item.x, item.y);
+            }
+        });
+
+        this.ctx.save(); this.ctx.translate(this.plate.x, this.plate.y);
+        this.ctx.fillStyle = 'rgba(0,0,0,0.3)'; this.ctx.beginPath(); this.ctx.ellipse(0, CONFIG.plateHeight/2+8, CONFIG.plateWidth/2, 12, 0, 0, Math.PI*2); this.ctx.fill();
+        this.ctx.fillStyle = '#EEEEEE'; this.ctx.beginPath(); this.ctx.ellipse(0, 0, CONFIG.plateWidth/2, CONFIG.plateHeight/2, 0, 0, Math.PI*2); this.ctx.fill();
+        this.ctx.strokeStyle = '#CCCCCC'; this.ctx.lineWidth = 4; this.ctx.stroke();
+
+        this.currentStack.forEach((layer, index) => {
+            const stackY = -15 - (index * CONFIG.STACK_HEIGHT_STEP);
+            this.ctx.fillStyle = 'rgba(255,255,255,0.8)';
+            this.ctx.beginPath(); this.ctx.arc(0, stackY, CONFIG.itemSize/2 - 2, 0, Math.PI*2); this.ctx.fill();
+            if (layer.id === 'bottom_bun') drawBottomBun(this.ctx, 0, stackY, CONFIG.itemSize);
+            else if (layer.id === 'top_bun') drawTopBun(this.ctx, 0, stackY, CONFIG.itemSize);
+            else if (layer.id === 'veggie') drawLettuce(this.ctx, 0, stackY, CONFIG.itemSize);
+            else {
+                this.ctx.font = `${CONFIG.itemSize}px Arial`;
+                this.ctx.fillText(layer.icon, 0, stackY);
+            }
+        });
+        this.ctx.restore();
+
+        this.particles.forEach(p => {
+            this.ctx.globalAlpha = p.life; this.ctx.fillStyle = p.color;
+            this.ctx.beginPath(); this.ctx.arc(p.x, p.y, 6, 0, Math.PI * 2); this.ctx.fill();
+            this.ctx.globalAlpha = 1.0;
+        });
+    }
+
+    gameLoop(timestamp) {
+        if (!this.isPlaying) return;
+        let dt = timestamp - this.lastTime; this.lastTime = timestamp;
+        if (dt > 50) dt = 50;
+        this.update(dt); this.draw();
+        requestAnimationFrame(this.gameLoop.bind(this));
+    }
+}
+
+window.onload = () => { window.game = new Game(); };
+</script>
+</body>
+</html>
